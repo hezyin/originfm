@@ -142,35 +142,45 @@ void init_model(Model &model)
     }
 }
 
-/*
 
-void save_model(Model &model, std::string output_path)
+void save_model(Model &model, std::map<std::pair<uint32_t, uint32_t>, uint64_t> &fviMap, std::string output_path)
 {
-    float * const W = model.W.data();
-    uint32_t align0 = model.factor * kW_NODE_SIZE; // +align0: next feature value 
-    uint32_t align1 = model.feature_range * align0; // +align1: next feature
+    uint64_t range_sum = model.range_sum;
+    uint32_t nr_factor = model.nr_factor;
+    uint32_t align = model.nr_factor * kW_NODE_SIZE;
 
-    FILE* modelfile;
-    modelfile = fopen(output_path.c_str(), "w+");
-    fprintf(modelfile, "feature %d\n", model.feature);
-    fprintf(modelfile, "feature_range %d\n", model.feature_range);
-    fprintf(modelfile, "factor %d\n", model.factor);
-    for(uint32_t i = 0; i < model.feature; i++)
+    float * const fW = model.W.data();
+    float * const sW = model.W.data() + range_sum * kW_NODE_SIZE;
+
+    FILE* modelfile = fopen(output_path.c_str(), "w+");
+    fprintf(modelfile, "range_sum %llu\n", range_sum);
+    fprintf(modelfile, "nr_factor %d\n", nr_factor);
+
+    std::map<std::pair<uint32_t, uint32_t>, uint64_t>::iterator it;
+
+    for(it = fviMap.begin(); it != fviMap.end(); ++it)
     {
-        fprintf(modelfile, "# Feature %d\n", i+1);
-        for(uint32_t j = 0; j < model.feature_range; j++)
+        fprintf(modelfile, "%d %d %llu\n", (it->first).first, (it->first).second, it->second);
+    }
+
+    for(uint64_t i = 0; i < range_sum; ++i)
+    {
+        fprintf(modelfile, "%llu %.5f\n", i+1, *(fW + i * kW_NODE_SIZE));
+    }
+
+    for(uint64_t i = 0; i < range_sum; ++i)
+    {
+        fprintf(modelfile, "# Item %llu\n", i+1);
+        for(uint32_t k = 0; k < nr_factor; k++)
         {
-            for(uint32_t k = 0; k < model.factor; k++)
-            {
-                fprintf(modelfile, "%.5f ", *(W + i * align1 + j * align0 + k));
-            }
-            fprintf(modelfile, "\n");
+            fprintf(modelfile, "%.5f ", *(sW + i * align + k));
         }
-        fprintf(modelfile, "\n");
+        fprintf(modelfile, "\n\n");
     }
     fclose(modelfile);
 }
 
+/*
 void read_model(std::string const &path, Model& model)
 {
     if(path.empty())
@@ -407,9 +417,9 @@ int main(int const argc, char const * const * const argv)
 
         train(Tr, Va, model, opt);
 
-        //std::cout << "saving model..." << std::flush;
-        //save_model(model, "model.txt");
-        //std::cout << "done\n" << std::flush;
+        std::cout << "saving model..." << std::flush;
+        save_model(model, fviMap, "model.txt");
+        std::cout << "done\n" << std::flush;
 
 	      omp_set_num_threads(1);
     }
