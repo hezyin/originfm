@@ -127,6 +127,12 @@ void init_model(Model &model)
         static_cast<float>(0.5/sqrt(static_cast<double>(nr_factor)));
 
     float * w = model.W.data();
+
+    for(uint64_t i = 0; i < range_sum; ++i)
+    {
+        *(w++) = coef*static_cast<float>(drand48());
+        *(w++) = 1;
+    }
     for(uint64_t i = 0; i < range_sum; ++i)
     {
         for(uint32_t d = 0; d < nr_factor; ++d, ++w)

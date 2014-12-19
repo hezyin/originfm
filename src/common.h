@@ -30,7 +30,7 @@ struct Model
 {
     Model(uint64_t const range_sum, uint32_t const nr_factor) 
         : range_sum(range_sum), nr_factor(nr_factor),
-        W(range_sum * nr_factor * kW_NODE_SIZE, 0) {} 
+        W(range_sum * (nr_factor+1) * kW_NODE_SIZE ) {} // W is initialized by init_model() 
     uint64_t range_sum;
     uint32_t nr_factor;
     std::vector<float> W;
@@ -52,50 +52,77 @@ inline float wTx(Problem const &prob, Model &model, uint32_t const i,
 
     //initialize pointers
     uint64_t const * const J = &prob.J[i * nr_feature]; 
-    float * const W = model.W.data();
+    float * const fW = model.W.data(); //first order parameter
+    float * const sW = model.W.data() + kW_NODE_SIZE * range_sum; //second order parameter
 
     float predict = 0.0;
 
-    for(uint32_t d = 0; d < nr_factor; d++)
+    if(do_update)
     {
-        if(do_update)
+        //update first order parameter
+        
+        for(uint32_t f = 0; f < nr_feature; ++f)
         {
-            float gs = 0.0;
-            for(uint32_t f = 0; f < nr_feature; f++)
+            uint64_t const j = J[f];
+            if(j >= range_sum) //ignore if not present in training set
+                continue;
+            float * const w = fW + j * kW_NODE_SIZE;
+            float * const shg = w + 1;
+            float const gradient = kappa + lambda * *w;
+            *w -= static_cast<float>(eta * gradient / sqrt(*shg) ); 
+            *shg += (gradient * gradient); //update history gradient sum
+        }
+
+        //update second order parameter
+        for(uint32_t d = 0; d < nr_factor; ++d)
+        {
+            float gs = 0.0; // gs = \sum_{j=1}^n v_{j, f}
+            for(uint32_t f = 0; f < nr_feature; ++f)
             {
                 uint64_t const j = J[f];
-                if(j >= range_sum) //ignore if not present in training set
+                if(j >= range_sum) 
                     continue;
-                gs += *(W + j * align + d); // \sum W_{J[f]}_d
+                gs += *(sW + j * align + d); 
             }
-            for(uint32_t f = 0; f < nr_feature; f++)
+            for(uint32_t f = 0; f < nr_feature; ++f)
             {
                 uint64_t const j = J[f];
-                if(j >= range_sum) //ignore if not present in training set
+                if(j >= range_sum) 
                     continue;
-                float * const w = W + j * align + d;  
+                float * const w = sW + j * align + d;  
                 float * const shg = w + nr_factor;
-                float const gradient = kappa * (gs - *w) + lambda * *w; //compute gradient
+                float const gradient = kappa * (gs - *w) + lambda * *w; 
+                *w -= static_cast<float> (eta * gradient / sqrt(*shg)); 
                 *shg += (gradient * gradient); //update sum history gradient
-                *w -= static_cast<float> (eta * gradient / sqrt(*shg)); //update weight
             }
         }
-        else
+    }
+    else
+    {
+        //compute first order value
+        for(uint32_t f = 0; f < nr_feature; ++f)
         {
-            for(uint32_t f1 = 0; f1 < nr_feature; f1++)
+            uint64_t const j = J[f];
+            if(j >= range_sum)
+                continue;
+            predict += *(fW + j * kW_NODE_SIZE);
+        }
+
+        //compute second order value
+        for(uint32_t d = 0; d < nr_factor; ++d)
+        {
+            for(uint32_t f1 = 0; f1 < nr_feature; ++f1)
             {
                 uint64_t const j1 = J[f1];
                 if(j1 >= range_sum)
                     continue;
-                float * const w1 = W + j1 * align + d; 
-                for(uint32_t f2 = f1 + 1; f2 < nr_feature; f2++)
+                for(uint32_t f2 = f1 + 1; f2 < nr_feature; ++f2)
                 {
                     uint64_t const j2 = J[f2]; 
                     if(j2 >= range_sum)
                         continue;
-                    float * const w2 = W + j2 * align + d; 
+                    predict += *(sW + j1 * align + d) * *(sW + j2 * align + d);
                     //predict += (*w1) * (*w2) / static_cast<float>(nr_feature); 
-                    predict += (*w1) * (*w2);
                 }
             }
         }
