@@ -4,10 +4,12 @@
 #include <omp.h>
 #include <stdio.h>
 #include <cstring>
+#include <unordered_map>
 #include <map>
 
 #include "common.h"
 #include "timer.h"
+#include "pairhash.h"
 
 namespace {
 
@@ -127,36 +129,37 @@ void init_model(Model &model)
         static_cast<float>(0.5/sqrt(static_cast<double>(nr_factor)));
 
     float * w = model.W.data();
-
     for(uint64_t i = 0; i < range_sum; ++i)
     {
         *(w++) = coef*static_cast<float>(drand48());
         *(w++) = 1;
     }
+
+    float * v = model.V.data();
     for(uint64_t i = 0; i < range_sum; ++i)
     {
-        for(uint32_t d = 0; d < nr_factor; ++d, ++w)
-            *w = coef*static_cast<float>(drand48());
-        for(uint32_t d = 0; d < nr_factor; ++d, ++w)
-            *w = 1;
+        for(uint32_t d = 0; d < nr_factor; ++d, ++v)
+            *v = coef*static_cast<float>(drand48());
+        for(uint32_t d = 0; d < nr_factor; ++d, ++v)
+            *v = 1;
     }
 }
 
 
-void save_model(Model &model, std::map<std::pair<uint32_t, uint32_t>, uint64_t> &fviMap, std::string output_path)
+void save_model(Model &model, std::unordered_map<std::pair<uint32_t, uint32_t>, uint64_t, pairhash> &fviMap, std::string output_path)
 {
     uint64_t range_sum = model.range_sum;
     uint32_t nr_factor = model.nr_factor;
-    uint32_t align = model.nr_factor * kW_NODE_SIZE;
+    uint32_t valign = model.nr_factor * NODE_SIZE;
 
-    float * const fW = model.W.data();
-    float * const sW = model.W.data() + range_sum * kW_NODE_SIZE;
+    float * const W = model.W.data();
+    float * const V = model.V.data();
 
     FILE* modelfile = fopen(output_path.c_str(), "w+");
     fprintf(modelfile, "range_sum %llu\n", range_sum);
     fprintf(modelfile, "nr_factor %d\n", nr_factor);
 
-    std::map<std::pair<uint32_t, uint32_t>, uint64_t>::iterator it;
+    std::unordered_map<std::pair<uint32_t, uint32_t>, uint64_t, pairhash>::iterator it;
 
     for(it = fviMap.begin(); it != fviMap.end(); ++it)
     {
@@ -165,7 +168,7 @@ void save_model(Model &model, std::map<std::pair<uint32_t, uint32_t>, uint64_t> 
 
     for(uint64_t i = 0; i < range_sum; ++i)
     {
-        fprintf(modelfile, "%llu %.5f\n", i+1, *(fW + i * kW_NODE_SIZE));
+        fprintf(modelfile, "%llu %.5f\n", i+1, *(W + i * NODE_SIZE));
     }
 
     for(uint64_t i = 0; i < range_sum; ++i)
@@ -173,7 +176,7 @@ void save_model(Model &model, std::map<std::pair<uint32_t, uint32_t>, uint64_t> 
         fprintf(modelfile, "# Item %llu\n", i+1);
         for(uint32_t k = 0; k < nr_factor; k++)
         {
-            fprintf(modelfile, "%.5f ", *(sW + i * align + k));
+            fprintf(modelfile, "%.5f ", *(V + i * valign + k));
         }
         fprintf(modelfile, "\n\n");
     }
@@ -359,7 +362,7 @@ int main(int const argc, char const * const * const argv)
         return EXIT_FAILURE;
     }
     
-   std::map<std::pair<uint32_t, uint32_t>, uint64_t> fviMap; // key: pair of feature number and its value, value: corresponding index in weight vector 
+   std::unordered_map<std::pair<uint32_t, uint32_t>, uint64_t, pairhash> fviMap; // key: pair of feature number and its value, value: corresponding index in weight vector 
 
     std::cout << "reading tr dataset...\n" << std::flush;
     Problem const Tr = read_tr_problem(opt.Tr_path, fviMap);
