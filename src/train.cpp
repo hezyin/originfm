@@ -19,10 +19,10 @@ int const kMaxLineSize = 1000000;
 struct Option
 {
     Option() 
-        : eta(0.001f), lambda(0.0f), iter(15), nr_factor(4), 
+        : eta1(0.001f), eta2(0.001f), lambda1(0.0f), lambda2(0.0f), iter(15), nr_factor(4), 
           nr_threads(1), do_prediction(true), model_existed(false), save_model(false) {}
-    std::string Tr_path, Va_path, model_path;
-    float eta, lambda;
+    std::string Tr_path, Va_path, model_path, log_path;
+    float eta1, eta2, lambda1, lambda2;
     uint32_t iter, nr_factor, nr_threads;
     bool do_prediction;
     bool model_existed;
@@ -37,13 +37,15 @@ std::string train_help()
 "<validation_path>.out will be automatically generated at the end of training\n"
 "\n"
 "options:\n"
-"-l <lambda>: set the regularization penalty\n"
+"-l1 <lambda1>: set the regularization penalty for first order parameters\n"
+"-l2 <lambda2>: set the regularization penalty for second order parameters\n"
 "-k <factor>: set the number of latent factors, which must be a multiple of 4\n"
 "-t <iteration>: set the number of iterations\n"
-"-r <eta>: set the learning rate\n"
+"-e1 <eta1>: set the learning rate for first order parameters\n"
+"-e2 <eta2>: set the learning rate for second order parameters\n"
 "-s <nr_threads>: set the number of threads\n"
 "-q: if it is set, then there is no output file\n"
-"-e <model>: use existed model instead of training\n"
+"-m <model>: use existed model instead of training\n"
 "-v: save model after training\n");
 }
 
@@ -73,17 +75,29 @@ Option parse_option(std::vector<std::string> const &args)
             /*if(opt.nr_factor%4 != 0)
                 throw std::invalid_argument("k should be a multiple of 4\n");*/
         }
-        else if(args[i].compare("-r") == 0)
+        else if(args[i].compare("-e1") == 0)
         {
             if(i == argc-1)
                 throw std::invalid_argument("invalid command\n");
-            opt.eta = std::stof(args[++i]);
+            opt.eta1 = std::stof(args[++i]);
         }
-        else if(args[i].compare("-l") == 0)
+        else if(args[i].compare("-e2") == 0)
         {
             if(i == argc-1)
                 throw std::invalid_argument("invalid command\n");
-            opt.lambda = std::stof(args[++i]);
+            opt.eta2 = std::stof(args[++i]);
+        }
+        else if(args[i].compare("-l1") == 0)
+        {
+            if(i == argc-1)
+                throw std::invalid_argument("invalid command\n");
+            opt.lambda1 = std::stof(args[++i]);
+        }
+        else if(args[i].compare("-l2") == 0)
+        {
+            if(i == argc-1)
+                throw std::invalid_argument("invalid command\n");
+            opt.lambda2 = std::stof(args[++i]);
         }
         else if(args[i].compare("-s") == 0)
         {
@@ -95,12 +109,18 @@ Option parse_option(std::vector<std::string> const &args)
         {
             opt.do_prediction = false;
         }
-        else if(args[i].compare("-e") == 0)
+        else if(args[i].compare("-m") == 0)
         {
             opt.model_existed = true;
             if(i == argc-1)
                 throw std::invalid_argument("invalid command\n");
             opt.model_path = args[++i];
+        }
+        else if(args[i].compare("-g") == 0)
+        {
+            if(i == argc-1)
+                throw std::invalid_argument("invalid command\n");
+            opt.log_path = args[++i];
         }
         else if(args[i].compare("-v") == 0)
         {
@@ -274,14 +294,7 @@ float auc(Problem const &prob, std::string predict_path)
     for(uint32_t i = 1; i < n; i++)
     {
         //use i as threshold point, for all points before i, prediction value is -1
-        if(prob.Y[pbs[i].second] > 0)
-        {
-            tp--; fn++;
-        }
-        else
-        {
-            fp--; tn++;
-        }
+        if(prob.Y[pbs[i].second] > 0) { tp--; fn++; } else { fp--; tn++; }
         fpr = (float) fp / (float) (fp + tn);
         tpr = (float) tp / (float) (tp + fn);
         fp_tp[fpr] = tpr;
@@ -310,6 +323,14 @@ void train(Problem const &Tr, Problem const &Va, Model &model, Option const &opt
         order[i] = i;
 
     Timer timer;
+    FILE * logfile = nullptr;
+    if(!opt.log_path.empty())
+    {
+        logfile = fopen(opt.log_path.c_str(), "w+");
+        fprintf(logfile, "iter     time    tr_loss    va_loss\n");
+        fflush(logfile);
+    }
+
     printf("iter     time    tr_loss    va_loss\n");
     for(uint32_t iter = 0; iter < opt.iter; ++iter)
     {
@@ -324,7 +345,7 @@ void train(Problem const &Tr, Problem const &Va, Model &model, Option const &opt
 
             float const y = Tr.Y[i];
 
-            float const t = wTx(Tr, model, i);
+            float const t = wTx_sse(Tr, model, i);
             
             float const expnyt = static_cast<float>(exp(-y*t));
 
@@ -332,7 +353,7 @@ void train(Problem const &Tr, Problem const &Va, Model &model, Option const &opt
 
             float const kappa = -y*expnyt/(1+expnyt);
 
-            wTx(Tr, model, i, kappa, opt.eta, opt.lambda, true);
+            wTx_sse(Tr, model, i, kappa, opt.eta1, opt.eta2, opt.lambda1, opt.lambda2, true);
         }
 
         //Tr_loss /= static_cast<double>(Tr.Y.size());
@@ -340,10 +361,20 @@ void train(Problem const &Tr, Problem const &Va, Model &model, Option const &opt
         Tr_loss = predict(Tr, model);
 
         double const Va_loss = predict(Va, model);
+        
+        if(!opt.log_path.empty())
+        {
+            fprintf(logfile, "%4d %8.1f %10.5f %10.5f\n", iter+1, timer.toc(), Tr_loss, Va_loss);
+            fflush(logfile);
+        }
 
-        printf("%4d %8.1f %10.5f %10.5f\n", 
-              iter, timer.toc(), Tr_loss, Va_loss);
+        printf("%4d %8.1f %10.5f %10.5f\n", iter+1, timer.toc(), Tr_loss, Va_loss);
         fflush(stdout);
+    }
+
+    if(!opt.log_path.empty())
+    {
+        fclose(logfile);
     }
 }
 
@@ -420,9 +451,9 @@ int main(int const argc, char const * const * const argv)
 
         train(Tr, Va, model, opt);
 
-        std::cout << "saving model..." << std::flush;
+        /*std::cout << "saving model..." << std::flush;
         save_model(model, fviMap, "model.txt");
-        std::cout << "done\n" << std::flush;
+        std::cout << "done\n" << std::flush;*/
 
 	      omp_set_num_threads(1);
     }
