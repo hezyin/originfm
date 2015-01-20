@@ -46,6 +46,7 @@ std::string train_help()
 "-s <nr_threads>: set the number of threads\n"
 "-q: if it is set, then there is no output file\n"
 "-m <model>: use existed model instead of training\n"
+"-g: <log_path> set the log file path\n"
 "-v: save model after training\n");
 }
 
